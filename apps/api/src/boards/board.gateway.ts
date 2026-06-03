@@ -9,6 +9,7 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { AuthService } from '../auth/auth.service';
 
 type BoardRoomPayload = { boardId: string };
 
@@ -35,6 +36,14 @@ function roomFor(boardId: string) {
   return `board:${boardId}`;
 }
 
+function extractToken(client: Socket): string | null {
+  const auth = client.handshake.auth as { token?: unknown } | undefined;
+  if (auth && typeof auth.token === 'string' && auth.token) return auth.token;
+  const queryToken = client.handshake.query.token;
+  if (typeof queryToken === 'string' && queryToken) return queryToken;
+  return null;
+}
+
 @WebSocketGateway({
   cors: { origin: true, credentials: true },
 })
@@ -44,7 +53,23 @@ export class BoardGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server!: Server;
 
+  constructor(private readonly auth: AuthService) {}
+
   handleConnection(client: Socket) {
+    const token = extractToken(client);
+    if (!token) {
+      this.logger.warn(`client ${client.id} rejected: no token`);
+      client.disconnect(true);
+      return;
+    }
+    try {
+      this.auth.verify(token);
+    } catch {
+      this.logger.warn(`client ${client.id} rejected: invalid token`);
+      client.disconnect(true);
+      return;
+    }
+
     const boardId = client.handshake.query.boardId;
     if (typeof boardId === 'string' && boardId.length > 0) {
       client.join(roomFor(boardId));

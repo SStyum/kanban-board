@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
+import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { BoardsModule } from './boards/boards.module';
 import { CardsModule } from './cards/cards.module';
@@ -12,6 +13,7 @@ import { CardsModule } from './cards/cards.module';
       envFilePath: ['../../.env'],
     }),
     PrismaModule,
+    AuthModule,
     BoardsModule,
     CardsModule,
   ],

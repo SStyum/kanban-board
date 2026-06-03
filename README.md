@@ -1,60 +1,100 @@
 # Kanban Board
 
-Board colaborativo em tempo real com WebSocket.
+[![Tests](https://img.shields.io/badge/tests-jest-blue)](apps/api/src/boards/board.gateway.spec.ts)
+[![Stack](https://img.shields.io/badge/stack-NestJS%20%2B%20React-success)](#stack)
+
+Board colaborativo em tempo real com WebSocket. Drag-and-drop, sync entre abas,
+autenticação JWT. Cada aba vê em tempo real o que as outras estão fazendo.
+
+> **Demo**: _adicione o link aqui depois de fazer o deploy_
 
 ## Stack
 
-- API: NestJS + Prisma + Socket.io
-- Web: React + dnd-kit + Zustand
+- **API**: NestJS · Prisma · Socket.io · PostgreSQL · JWT
+- **Web**: React · Vite · dnd-kit · Zustand · socket.io-client
 
 ## Como rodar
 
-1. `cp .env.example .env`
-2. `docker compose up -d`
-3. `cd apps/api && pnpm prisma:migrate && pnpm prisma:seed && pnpm dev`
-4. `cd apps/web && pnpm dev`
+```bash
+cp .env.example .env
+docker compose up -d
+cd apps/api
+pnpm install
+pnpm prisma:migrate
+pnpm prisma:seed     # cria usuário demo@kanban.local / kanban123 e um board
+pnpm dev             # API em http://localhost:3000
+
+# em outro terminal
+cd apps/web && pnpm dev   # Web em http://localhost:5173
+```
+
+A seed cria um usuário demo (`demo@kanban.local` / `kanban123`) e um board "Sprint 1".
+Login na tela inicial usa essas credenciais por padrão.
 
 ## Estrutura de dados
 
 ```
-Board ──< Column ──< Card
-  id        id        id
-  name      name      title
-  createdAt position  description
-            boardId   position
-                      columnId
-                      createdAt
-                      updatedAt
+User                Board ──< Column ──< Card
+  id                  id        id        id
+  email (unique)      name      name      title
+  password (hash)     createdAt position  description
+  createdAt                     boardId   position
+                                          columnId
+                                          createdAt
+                                          updatedAt
 ```
 
 Schema completo em [apps/api/prisma/schema.prisma](apps/api/prisma/schema.prisma).
 Cascata de delete: remover um `Board` apaga colunas e cards; remover uma `Column` apaga seus cards.
 
+## Autenticação
+
+JWT simples — access token assinado com `JWT_SECRET`, expira em `JWT_EXPIRES_IN` (default `7d`).
+Sem refresh token, sem cookies — token vai no header `Authorization: Bearer <token>` nas requisições
+REST e no campo `auth.token` no handshake do Socket.io.
+
+```ts
+// Frontend (lib/api.ts) injeta o header automaticamente
+fetch('/boards', { headers: { authorization: `Bearer ${token}` } });
+
+// Frontend (lib/socket.ts) injeta no handshake
+io(API_URL, { auth: { token }, query: { boardId } });
+```
+
+Senha hashada com bcrypt (10 rounds). 401 no REST faz o frontend deslogar e voltar pra Login.
+401 / disconnect server-side no WS também desloga.
+
 ## Endpoints (REST)
 
-| Método | Rota          | Body                                             | Descrição                                         |
-| ------ | ------------- | ------------------------------------------------ | ------------------------------------------------- |
-| GET    | `/health`     | —                                                | Liveness probe                                    |
-| GET    | `/boards`     | —                                                | Lista boards com contagem de colunas              |
-| GET    | `/boards/:id` | —                                                | Board com colunas e cards ordenados por position  |
-| POST   | `/boards`     | `{ name }`                                       | Cria board com 3 colunas padrão (Todo/Doing/Done) |
-| DELETE | `/boards/:id` | —                                                | Remove board e tudo abaixo (cascade)              |
-| POST   | `/cards`      | `{ columnId, title, description? }`              | Cria card no final da coluna                      |
-| PATCH  | `/cards/:id`  | `{ title?, description?, columnId?, position? }` | Atualiza ou move card                             |
-| DELETE | `/cards/:id`  | —                                                | Remove card                                       |
+| Método | Rota             | Auth | Body                                             | Descrição                                         |
+| ------ | ---------------- | ---- | ------------------------------------------------ | ------------------------------------------------- |
+| GET    | `/health`        | —    | —                                                | Liveness probe                                    |
+| POST   | `/auth/register` | —    | `{ email, password }`                            | Cria usuário, retorna `{ user, accessToken }`     |
+| POST   | `/auth/login`    | —    | `{ email, password }`                            | Retorna `{ user, accessToken }`                   |
+| GET    | `/boards`        | JWT  | —                                                | Lista boards com contagem de colunas              |
+| GET    | `/boards/:id`    | JWT  | —                                                | Board com colunas e cards ordenados por position  |
+| POST   | `/boards`        | JWT  | `{ name }`                                       | Cria board com 3 colunas padrão (Todo/Doing/Done) |
+| DELETE | `/boards/:id`    | JWT  | —                                                | Remove board e tudo abaixo (cascade)              |
+| POST   | `/cards`         | JWT  | `{ columnId, title, description? }`              | Cria card no final da coluna                      |
+| PATCH  | `/cards/:id`     | JWT  | `{ title?, description?, columnId?, position? }` | Atualiza ou move card                             |
+| DELETE | `/cards/:id`     | JWT  | —                                                | Remove card                                       |
 
 ## WebSocket Events
 
 Socket.io rodando no mesmo host da API (`ws://localhost:3000`). Cada board tem uma room
-`board:<boardId>` — só recebe eventos quem está nela.
+`board:<boardId>` — só recebe eventos quem está nela. **Conexões sem token JWT válido
+são derrubadas em `handleConnection`** — nada vaza pra cliente não autenticado.
 
-**Como entrar numa room** — duas formas equivalentes:
+**Como entrar numa room** — token obrigatório:
 
 ```ts
-// 1) handshake query (auto-join ao conectar)
-const socket = io('ws://localhost:3000', { query: { boardId } });
+// 1) handshake auth + query (auto-join ao conectar)
+const socket = io('ws://localhost:3000', {
+  auth: { token: accessToken },
+  query: { boardId },
+});
 
-// 2) evento explícito (útil pra trocar de board sem reconectar)
+// 2) eventos explícitos (útil pra trocar de board sem reconectar)
 socket.emit('join-board', { boardId });
 socket.emit('leave-board', { boardId });
 ```
@@ -90,7 +130,8 @@ ordenados por `position`. Estados de loading / vazio (sugere rodar o seed) / err
 └────────────────────────────────────────────────────────────────┘
 ```
 
-Componentes em [apps/web/src/components/](apps/web/src/components/).
+Componentes em [apps/web/src/components/](apps/web/src/components/). Sem token, App renderiza
+[LoginPage](apps/web/src/pages/LoginPage.tsx) ao invés do board.
 
 ## Drag and drop
 
@@ -147,3 +188,53 @@ cliente (a aba que originou a mutação também recebe o broadcast).
 
 **Como testar com 2 abas**: rode API + web, abra `http://localhost:5173` em duas abas,
 arraste um card numa — a outra reflete na hora.
+
+## Testes
+
+```bash
+cd apps/api && pnpm test
+```
+
+Suite de unit tests em [board.gateway.spec.ts](apps/api/src/boards/board.gateway.spec.ts) cobre:
+
+- `handleConnection` autoriza com JWT válido, rejeita sem token, rejeita token inválido
+- `join-board` / `leave-board` adicionam / removem da room certa
+- `emitCardCreated` / `emitCardMoved` / `emitCardDeleted` despacham pra `board:<id>`
+
+11 testes, ~1s. Roda no `@nestjs/testing` com `AuthService` mockado.
+
+## Deploy
+
+Tudo configurado pra rodar no [Railway](https://railway.app) (API + Postgres) com Vercel
+ou Railway hospedando o `apps/web` estático.
+
+### API + Postgres (Railway)
+
+1. `railway login`
+2. `railway init` no root do repo
+3. Adicione o plugin Postgres: `railway add` → escolha "PostgreSQL"
+4. Configure variáveis do serviço API:
+   - `DATABASE_URL` (vem do plugin Postgres — Railway injeta automático se vincular)
+   - `JWT_SECRET` — gere com `openssl rand -hex 32`
+   - `JWT_EXPIRES_IN=7d`
+   - `API_PORT` — Railway expõe via `$PORT`, configure o serviço pra usar
+   - `NODE_ENV=production`
+5. Comandos do serviço:
+   - Build: `cd apps/api && pnpm install && pnpm prisma generate && pnpm build`
+   - Start: `cd apps/api && pnpm exec prisma migrate deploy && node dist/main.js`
+6. `railway up`
+
+### Web (Vercel ou Railway)
+
+1. Build: `cd apps/web && pnpm install && pnpm build`
+2. Output: `apps/web/dist`
+3. Variável: `VITE_API_URL=https://<sua-api>.railway.app`
+4. Rewrite/proxy SPA: serve `index.html` pra qualquer rota não-asset
+
+### Checklist pré-deploy
+
+- [ ] `JWT_SECRET` aleatório e longo (NUNCA o default)
+- [ ] `DATABASE_URL` apontando pra Postgres gerenciado
+- [ ] CORS — `app.enableCors({ origin: <web-url> })` em [main.ts](apps/api/src/main.ts) se quiser restringir
+- [ ] `VITE_API_URL` no build do web aponta pra API de produção
+- [ ] Demo user opcional — pode remover ou trocar a senha do seed antes de subir
