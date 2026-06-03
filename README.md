@@ -69,3 +69,26 @@ socket.emit('leave-board', { boardId });
 
 > `card:moved` dispara apenas quando `columnId` ou `position` mudam — edições de
 > título/descrição não emitem evento.
+
+## Frontend
+
+Página única carrega o primeiro board via `GET /boards` + `GET /boards/:id`. Se existir
+mais de um board, aparece um seletor no topo. Layout horizontal de colunas com cards
+ordenados por `position`. Estados de loading / vazio (sugere rodar o seed) / erro.
+
+```
+┌─ Sprint 1 ─────────────────────────────────────────────────────┐
+│                                                                │
+│  ┌─ TODO (2) ─┐  ┌─ DOING (1) ─┐  ┌─ DONE (1) ─┐                │
+│  │ ┌────────┐ │  │ ┌─────────┐ │  │ ┌────────┐ │                │
+│  │ │ Card A │ │  │ │ Card C  │ │  │ │ Card D │ │                │
+│  │ └────────┘ │  │ └─────────┘ │  │ └────────┘ │                │
+│  │ ┌────────┐ │  │             │  │            │                │
+│  │ │ Card B │ │  │             │  │            │                │
+│  │ └────────┘ │  │             │  │            │                │
+│  └────────────┘  └─────────────┘  └────────────┘                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+Componentes em [apps/web/src/components/](apps/web/src/components/). Sem drag-and-drop
+ainda — chega na próxima fase.
