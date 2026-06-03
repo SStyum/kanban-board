@@ -109,3 +109,41 @@ cliques) e `KeyboardSensor` (acessibilidade — Tab + Espaço para pegar, setas 
 
 Lógica de move em [apps/web/src/lib/board-mutations.ts](apps/web/src/lib/board-mutations.ts).
 DragOverlay renderiza uma cópia inclinada do card sob o cursor.
+
+## Sincronização em tempo real
+
+Cada aba abre um socket no `VITE_API_URL` com `?boardId=` no handshake — o servidor já
+coloca o cliente na room `board:<id>` automaticamente (sem precisar emitir `join-board`).
+O estado do board mora numa store [Zustand](apps/web/src/store/boardStore.ts) e os eventos
+caem direto nos handlers da store via `useBoardSocket` em [lib/socket.ts](apps/web/src/lib/socket.ts).
+
+**Fluxo de uma mutação colaborativa**:
+
+```
+       ┌────────┐                              ┌────────┐
+       │ Aba A  │                              │ Aba B  │
+       └───┬────┘                              └────┬───┘
+           │  drag&drop → optimistic update          │
+           │  PATCH /cards/:id ─────────► API        │
+           │                            │            │
+           │                            ▼            │
+           │                       broadcast         │
+           │  ◄──── card:moved ─────────┼───► card:moved ──►│
+           │  (idempotent reaplica)     │            store atualiza
+           │                                         UI espelha A
+```
+
+As ações da store (`applyCardCreated/Moved/Deleted`) são **idempotentes**: receber
+um evento que reflete um estado já presente é no-op. Isso resolve o eco do próprio
+cliente (a aba que originou a mutação também recebe o broadcast).
+
+**Indicador de conexão** — badge no topo direito:
+
+| Status                | Quando                                                       |
+| --------------------- | ------------------------------------------------------------ |
+| `Conectando…` amarelo | montou o hook, ainda não chegou `connect`                    |
+| `Ao vivo` verde       | `connect` recebido; mutações de outras abas aparecem na hora |
+| `Offline` vermelho    | `disconnect` ou `connect_error` (rede caiu / API derrubada)  |
+
+**Como testar com 2 abas**: rode API + web, abra `http://localhost:5173` em duas abas,
+arraste um card numa — a outra reflete na hora.

@@ -13,21 +13,29 @@ import {
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { Board } from '../components/Board';
 import { CardPresentation } from '../components/Card';
+import { ConnectionBadge } from '../components/ConnectionBadge';
 import { fetchBoard, fetchBoards, updateCard } from '../lib/api';
 import { findCardLocation, moveCard } from '../lib/board-mutations';
+import { useBoardSocket } from '../lib/socket';
+import { useBoardStore } from '../store/boardStore';
 import type { BoardDetail, BoardSummary, CardDto } from '../types';
 
-type State =
+type LoadState =
   | { kind: 'loading' }
   | { kind: 'empty' }
   | { kind: 'error'; message: string }
-  | { kind: 'ready'; boards: BoardSummary[]; board: BoardDetail };
+  | { kind: 'ready'; boards: BoardSummary[] };
 
 export function BoardPage() {
-  const [state, setState] = useState<State>({ kind: 'loading' });
+  const board = useBoardStore((s) => s.board);
+  const setBoard = useBoardStore((s) => s.setBoard);
+
+  const [loadState, setLoadState] = useState<LoadState>({ kind: 'loading' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeCard, setActiveCard] = useState<CardDto | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
+
+  const socketStatus = useBoardSocket(board?.id ?? null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -41,49 +49,52 @@ export function BoardPage() {
         const boards = await fetchBoards();
         if (cancelled) return;
         if (boards.length === 0) {
-          setState({ kind: 'empty' });
+          setBoard(null);
+          setLoadState({ kind: 'empty' });
           return;
         }
         const targetId = selectedId ?? boards[0].id;
-        const board = await fetchBoard(targetId);
+        const detail = await fetchBoard(targetId);
         if (cancelled) return;
-        setState({ kind: 'ready', boards, board });
+        setBoard(detail);
+        setLoadState({ kind: 'ready', boards });
       } catch (err) {
         if (cancelled) return;
-        setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+        setBoard(null);
+        setLoadState({
+          kind: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedId, setBoard]);
 
   const cardsById = useMemo(() => {
-    if (state.kind !== 'ready') return new Map<string, CardDto>();
     const map = new Map<string, CardDto>();
-    for (const col of state.board.columns) for (const c of col.cards) map.set(c.id, c);
+    if (!board) return map;
+    for (const col of board.columns) for (const c of col.cards) map.set(c.id, c);
     return map;
-  }, [state]);
+  }, [board]);
 
   function onDragStart(event: DragStartEvent) {
     const card = cardsById.get(String(event.active.id));
     if (card) setActiveCard(card);
   }
 
-  function resolveDropTarget(activeId: string, overId: string) {
-    if (state.kind !== 'ready') return null;
-    const board = state.board;
-
+  function resolveDropTarget(activeId: string, overId: string, currentBoard: BoardDetail) {
     if (overId.startsWith('column:')) {
       const columnId = overId.slice('column:'.length);
-      const column = board.columns.find((c) => c.id === columnId);
+      const column = currentBoard.columns.find((c) => c.id === columnId);
       if (!column) return null;
       return { columnId, index: column.cards.length };
     }
 
-    const overLocation = findCardLocation(board, overId);
+    const overLocation = findCardLocation(currentBoard, overId);
     if (!overLocation) return null;
-    const activeLocation = findCardLocation(board, activeId);
+    const activeLocation = findCardLocation(currentBoard, activeId);
     if (!activeLocation) return null;
 
     let targetIndex = overLocation.index;
@@ -96,18 +107,18 @@ export function BoardPage() {
   async function onDragEnd(event: DragEndEvent) {
     setActiveCard(null);
     const { active, over } = event;
-    if (!over || state.kind !== 'ready') return;
+    if (!over || !board) return;
 
     const activeId = String(active.id);
     const overId = String(over.id);
-    const target = resolveDropTarget(activeId, overId);
+    const target = resolveDropTarget(activeId, overId, board);
     if (!target) return;
 
-    const result = moveCard(state.board, activeId, target.columnId, target.index);
+    const result = moveCard(board, activeId, target.columnId, target.index);
     if (!result) return;
 
-    const previousBoard = state.board;
-    setState({ ...state, board: result.board });
+    const previousBoard = board;
+    setBoard(result.board);
     setMoveError(null);
 
     try {
@@ -116,14 +127,14 @@ export function BoardPage() {
         position: result.newPosition,
       });
     } catch (err) {
-      setState({ ...state, board: previousBoard });
+      setBoard(previousBoard);
       setMoveError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  if (state.kind === 'loading') return <p className="status">Carregando…</p>;
+  if (loadState.kind === 'loading') return <p className="status">Carregando…</p>;
 
-  if (state.kind === 'empty') {
+  if (loadState.kind === 'empty') {
     return (
       <div className="status">
         <p>Nenhum board ainda.</p>
@@ -134,33 +145,40 @@ export function BoardPage() {
     );
   }
 
-  if (state.kind === 'error') {
+  if (loadState.kind === 'error') {
     return (
       <div className="status status-error">
         <p>Erro ao carregar board:</p>
-        <pre>{state.message}</pre>
+        <pre>{loadState.message}</pre>
       </div>
     );
   }
 
+  if (!board) return <p className="status">Carregando board…</p>;
+
   return (
     <>
-      {state.boards.length > 1 && (
-        <nav className="board-picker">
-          <label htmlFor="board-select">Board: </label>
-          <select
-            id="board-select"
-            value={state.board.id}
-            onChange={(e) => setSelectedId(e.target.value)}
-          >
-            {state.boards.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-        </nav>
-      )}
+      <div className="topbar">
+        {loadState.boards.length > 1 ? (
+          <nav className="board-picker">
+            <label htmlFor="board-select">Board: </label>
+            <select
+              id="board-select"
+              value={board.id}
+              onChange={(e) => setSelectedId(e.target.value)}
+            >
+              {loadState.boards.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </nav>
+        ) : (
+          <div />
+        )}
+        <ConnectionBadge status={socketStatus} />
+      </div>
       {moveError && (
         <div className="toast toast-error" role="alert">
           Falha ao mover: {moveError}
@@ -175,7 +193,7 @@ export function BoardPage() {
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
       >
-        <Board board={state.board} />
+        <Board board={board} />
         <DragOverlay>{activeCard ? <CardPresentation card={activeCard} /> : null}</DragOverlay>
       </DndContext>
     </>
