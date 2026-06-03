@@ -42,3 +42,30 @@ Cascata de delete: remover um `Board` apaga colunas e cards; remover uma `Column
 | POST   | `/cards`      | `{ columnId, title, description? }`              | Cria card no final da coluna                      |
 | PATCH  | `/cards/:id`  | `{ title?, description?, columnId?, position? }` | Atualiza ou move card                             |
 | DELETE | `/cards/:id`  | —                                                | Remove card                                       |
+
+## WebSocket Events
+
+Socket.io rodando no mesmo host da API (`ws://localhost:3000`). Cada board tem uma room
+`board:<boardId>` — só recebe eventos quem está nela.
+
+**Como entrar numa room** — duas formas equivalentes:
+
+```ts
+// 1) handshake query (auto-join ao conectar)
+const socket = io('ws://localhost:3000', { query: { boardId } });
+
+// 2) evento explícito (útil pra trocar de board sem reconectar)
+socket.emit('join-board', { boardId });
+socket.emit('leave-board', { boardId });
+```
+
+**Eventos do servidor → cliente** (disparados pelas mutações REST em `/cards`):
+
+| Evento         | Disparado por                 | Payload                                       |
+| -------------- | ----------------------------- | --------------------------------------------- |
+| `card:created` | `POST /cards`                 | `{ boardId, columnId, card }`                 |
+| `card:moved`   | `PATCH /cards/:id` (move/pos) | `{ boardId, fromColumnId, toColumnId, card }` |
+| `card:deleted` | `DELETE /cards/:id`           | `{ boardId, columnId, cardId }`               |
+
+> `card:moved` dispara apenas quando `columnId` ou `position` mudam — edições de
+> título/descrição não emitem evento.
