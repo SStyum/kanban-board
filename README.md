@@ -90,5 +90,22 @@ ordenados por `position`. Estados de loading / vazio (sugere rodar o seed) / err
 └────────────────────────────────────────────────────────────────┘
 ```
 
-Componentes em [apps/web/src/components/](apps/web/src/components/). Sem drag-and-drop
-ainda — chega na próxima fase.
+Componentes em [apps/web/src/components/](apps/web/src/components/).
+
+## Drag and drop
+
+[dnd-kit](https://dndkit.com/) com `DndContext` + `SortableContext` por coluna. Cada coluna é um
+droppable, cada card é sortable. Sensores: `PointerSensor` (com 5px de tolerância pra não capturar
+cliques) e `KeyboardSensor` (acessibilidade — Tab + Espaço para pegar, setas pra mover).
+
+**Optimistic update com rollback**:
+
+```
+1. usuário solta o card
+2. estado local muda imediatamente (UI já reflete a nova posição)
+3. PATCH /cards/:id { columnId, position } é enviado em background
+4. se a API responder 4xx/5xx, o estado é revertido e um toast vermelho aparece no canto
+```
+
+Lógica de move em [apps/web/src/lib/board-mutations.ts](apps/web/src/lib/board-mutations.ts).
+DragOverlay renderiza uma cópia inclinada do card sob o cursor.
